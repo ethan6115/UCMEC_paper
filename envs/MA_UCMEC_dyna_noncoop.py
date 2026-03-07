@@ -139,7 +139,7 @@ class MA_UCMEC_dyna_noncoop(object):
         self.link_type = np.zeros([self.N, self.K])  # type of fronthaul links
         for i in range(self.N):
             for j in range(self.K):
-                self.P_los[i, j] = np.exp(-self.epsilon * self.distance_matrix_front[i, j] / 1000)  # LOS probability
+                self.P_los[i, j] = np.exp(-self.epsilon * self.distance_matrix_front[i, j])  # LOS probability
                 self.link_type[i, j] = np.random.choice([0, 1], p=[self.P_los[i, j],
                                                                    1 - self.P_los[i, j]])  # 0 for LOS, 1 for NLOS
                 # if link_type[i, j] == 0:  # LOS link
@@ -281,9 +281,9 @@ class MA_UCMEC_dyna_noncoop(object):
             for j in range(self.K):
                 if chi[i, j] == 1:
                     if self.link_type[i, j] == 0:  # LOS link 從[j, j] 改成[i, j]
-                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_los)
+                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j], -self.alpha_los)
                     else:
-                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_nlos)
+                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j], -self.alpha_nlos)
                 else:
                     pass
 
@@ -291,10 +291,10 @@ class MA_UCMEC_dyna_noncoop(object):
             for j in range(self.K):
                 if chi[i, j] == 1:
                     if self.link_type[i, j] == 0:  # LOS link
-                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j] / 1000,
+                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j],
                                                                          -self.alpha_los)
                     else:
-                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j] / 1000,
+                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j],
                                                                          -self.alpha_nlos)  #改成負號
                     SINR_front[i, j] = SINR_front_mole / (I_sum - SINR_front_mole / self.G[i, j] + self.noise_front)
                     front_rate[i, j] = self.bandwidth_f * np.log2(1 + SINR_front[i, j])
@@ -415,8 +415,8 @@ class MA_UCMEC_dyna_noncoop(object):
                     self.access_chan[i, j, k] = np.sqrt(self.beta[i, j]) * self.h[i, j, k]
         '''
         # 1. 生成隨機參數 (一次生成整個矩陣，取代迴圈內生成)
-        kappa_1 = np.random.rand(1, self.N)  # 形狀: (1, N)
-        kappa_2 = np.random.rand(self.M, 1)  # 形狀: (M, 1)，轉置以便廣播
+        kappa_1 = np.random.randn(1, self.N)  # 形狀: (1, N)
+        kappa_2 = np.random.randn(self.M, 1)  # 形狀: (M, 1)，轉置以便廣播
 
         # 2. 計算 Shadow Fading (mu) - 利用 Broadcasting
         # (1, N) 與 (M, 1) 運算會自動廣播成 (M, N) 矩陣
