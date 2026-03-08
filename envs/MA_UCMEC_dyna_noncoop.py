@@ -139,7 +139,7 @@ class MA_UCMEC_dyna_noncoop(object):
         self.link_type = np.zeros([self.N, self.K])  # type of fronthaul links
         for i in range(self.N):
             for j in range(self.K):
-                self.P_los[i, j] = np.exp(-self.epsilon * self.distance_matrix_front[i, j])  # LOS probability
+                self.P_los[i, j] = np.exp(-self.epsilon * self.distance_matrix_front[i, j] / 1000)  # LOS probability
                 self.link_type[i, j] = np.random.choice([0, 1], p=[self.P_los[i, j],
                                                                    1 - self.P_los[i, j]])  # 0 for LOS, 1 for NLOS
                 # if link_type[i, j] == 0:  # LOS link
@@ -281,9 +281,9 @@ class MA_UCMEC_dyna_noncoop(object):
             for j in range(self.K):
                 if chi[i, j] == 1:
                     if self.link_type[i, j] == 0:  # LOS link 從[j, j] 改成[i, j]
-                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j], -self.alpha_los)
+                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_los)
                     else:
-                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j], -self.alpha_nlos)
+                        I_sum = I_sum + self.p_ap * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_nlos)
                 else:
                     pass
 
@@ -291,11 +291,9 @@ class MA_UCMEC_dyna_noncoop(object):
             for j in range(self.K):
                 if chi[i, j] == 1:
                     if self.link_type[i, j] == 0:  # LOS link
-                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j],
-                                                                         -self.alpha_los)
+                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_los)
                     else:
-                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j],
-                                                                         -self.alpha_nlos)  #改成負號
+                        SINR_front_mole = self.p_ap * self.G[i, j] * pow(self.distance_matrix_front[i, j] / 1000, -self.alpha_nlos)  #改成負號
                     SINR_front[i, j] = SINR_front_mole / (I_sum - SINR_front_mole / self.G[i, j] + self.noise_front)
                     front_rate[i, j] = self.bandwidth_f * np.log2(1 + SINR_front[i, j])
 
@@ -445,7 +443,7 @@ class MA_UCMEC_dyna_noncoop(object):
                         self.tau_p * self.P_max * self.beta[i, j] + self.noise_access)
         '''
         theta = (self.tau_p * self.P_max * (self.beta ** 2)) / (self.tau_p * self.P_max * self.beta + self.noise_access)
-        # 論文提到動態方法為每10個time slot做一次cluster
+        # 論文提到動態方法為每10個time slot做一次cluster，這裡的測試先維持每time slot都更新一次cluster
         #if self.step_num == 1 or self.step_num % 10 == 0:
         self.cluster_matrix = self.cluster()
         cluster_matrix = self.cluster_matrix
@@ -468,8 +466,9 @@ class MA_UCMEC_dyna_noncoop(object):
         front_rate_user = self.front_rate_cal(omega_current, cluster_matrix)
         self.uplink_rate_access_b = uplink_rate_access
         # print("Fronthaul Rate", front_rate_user)
-        # print("Uplink Rate (Mbps):", uplink_rate_access / 10e6)
-        # print("Average Uplink Rate (Mbps):", np.sum(uplink_rate_access) / (np.count_nonzero(omega_current) * 10e6))
+        # print("Uplink Rate (Mbps):", uplink_rate_access / 1e6)  #應該是除以1e6而不是10e6
+        # print("Average Fronthaul Rate (Mbps):", np.sum(front_rate_user) / (np.count_nonzero(omega_current) * 1e6))
+        #print("Average Uplink Rate (Mbps):", np.sum(uplink_rate_access) / (np.count_nonzero(omega_current) * 1e6))
 
         # local computing delay
         local_delay = np.zeros([self.M_sim, 1])
@@ -574,8 +573,9 @@ class MA_UCMEC_dyna_noncoop(object):
         for i in range(self.M_sim):
             total_delay[i, 0] = np.maximum(local_delay[i, 0],
                                            front_delay[i, 0] + uplink_delay[i, 0] + actual_process_delay[i, 0])
-        max_delay = 1.0  # 超過 1 的clip，避免 reward 爆，原版code沒有
-        total_delay = np.minimum(total_delay, max_delay)
+        # 超過 1 的clip，避免 reward 爆，原版code沒有
+        #max_delay = 1.0  #此處先不clip
+        #total_delay = np.minimum(total_delay, max_delay)
 
         if self.step_num >= 200:    #>20改>=200
             done = [1] * self.M_sim
@@ -635,7 +635,7 @@ class MA_UCMEC_dyna_noncoop(object):
             self.p_last[i],
             self.delay_last[i, 0]
             ])
-            # norm_obs = raw_obs / self.norm_factor #論文原本code沒做正規化
+            # norm_obs = raw_obs / self.norm_factor #論文原本code沒做正規化，此處測試先不做正規化
             sub_agent_obs.append(raw_obs)
 
             sub_agent_reward.append(reward[i])
@@ -646,7 +646,7 @@ class MA_UCMEC_dyna_noncoop(object):
 
 
 if __name__ == "__main__":
-    seed = 3
+    seed = 4
     np.random.seed(seed)
     env = MA_UCMEC_dyna_noncoop(render=False)
     env.seed(seed)
