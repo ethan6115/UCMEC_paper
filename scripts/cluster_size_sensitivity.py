@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from envs.MA_UCMEC_dyna_noncoop import MA_UCMEC_dyna_noncoop
+from envs.MA_UCMEC_dyna_noncoop_metrics import MA_UCMEC_dyna_noncoop
 
 
 @dataclass
@@ -28,6 +28,16 @@ class StepMetrics:
     mean_front_delay_ms: float
     mean_process_delay_ms: float
     mean_offload_delay_ms: float
+
+
+@dataclass
+class ExtraDistributionMetrics:
+    cluster_size: int
+    uplink_rate_min_mbps: float
+    uplink_rate_p5_mbps: float
+    uplink_rate_median_mbps: float
+    uplink_delay_p95_ms: float
+    uplink_delay_max_ms: float
 
 
 def parse_cluster_sizes(raw: str) -> List[int]:
@@ -117,8 +127,8 @@ def reconstruct_delay_terms(
 
     offload_delay = uplink_delay + front_delay + process_delay
     total_delay = np.maximum(local_delay, offload_delay)
-    total_delay = np.minimum(total_delay, 1.0)
-
+    #total_delay = np.minimum(total_delay, 1.0) #先不clip
+ 
     return {
         "local_delay": local_delay,
         "uplink_delay": uplink_delay,
@@ -177,13 +187,38 @@ def average_metrics(metrics: List[StepMetrics]) -> Dict[str, float]:
     return out
 
 
+def build_extra_metrics(
+    cluster_size: int,
+    uplink_rates_mbps: np.ndarray,
+    uplink_delays_ms: np.ndarray,
+) -> ExtraDistributionMetrics:
+    if uplink_rates_mbps.size == 0:
+        return ExtraDistributionMetrics(
+            cluster_size=cluster_size,
+            uplink_rate_min_mbps=0.0,
+            uplink_rate_p5_mbps=0.0,
+            uplink_rate_median_mbps=0.0,
+            uplink_delay_p95_ms=0.0,
+            uplink_delay_max_ms=0.0,
+        )
+
+    return ExtraDistributionMetrics(
+        cluster_size=cluster_size,
+        uplink_rate_min_mbps=float(np.min(uplink_rates_mbps)),
+        uplink_rate_p5_mbps=float(np.percentile(uplink_rates_mbps, 5)),
+        uplink_rate_median_mbps=float(np.median(uplink_rates_mbps)),
+        uplink_delay_p95_ms=float(np.percentile(uplink_delays_ms, 95)),
+        uplink_delay_max_ms=float(np.max(uplink_delays_ms)),
+    )
+
+
 def run_one_cluster_size(
     cluster_size: int,
     steps: int,
     episodes: int,
     action_idx: int,
     seed: int,
-) -> Dict[str, float]:
+) -> (Dict[str, float], ExtraDistributionMetrics):
     np.random.seed(seed)
     env = MA_UCMEC_dyna_noncoop(render=False)
     env.seed(seed)
@@ -195,6 +230,8 @@ def run_one_cluster_size(
     _ = obs  # quiet lint
 
     metrics = []
+    all_offload_uplink_rates_mbps = []
+    all_offload_uplink_delays_ms = []
     total_steps = steps * episodes
     for _ in range(total_steps):
         task_size_prev = env.Task_size.copy()
@@ -203,13 +240,24 @@ def run_one_cluster_size(
         _, reward, done, _ = env.step(action)
         delay_terms = reconstruct_delay_terms(env, task_size_prev, task_density_prev)
         metrics.append(to_step_metrics(env, np.array(reward), delay_terms))
+        offload_mask = env.omega_last != 0
+        if np.any(offload_mask):
+            all_offload_uplink_rates_mbps.append(env.uplink_rate_access_b[offload_mask, 0] / 1e6)
+            all_offload_uplink_delays_ms.append(delay_terms["uplink_delay"][offload_mask, 0] * 1000)
 
         if np.all(done):
             env.reset()
 
     summary = average_metrics(metrics)
     summary["cluster_size"] = cluster_size
-    return summary
+    if all_offload_uplink_rates_mbps:
+        rates = np.concatenate(all_offload_uplink_rates_mbps)
+        delays = np.concatenate(all_offload_uplink_delays_ms)
+    else:
+        rates = np.array([])
+        delays = np.array([])
+    extra = build_extra_metrics(cluster_size, rates, delays)
+    return summary, extra
 
 
 def print_table(results: List[Dict[str, float]]) -> None:
@@ -245,6 +293,29 @@ def print_table(results: List[Dict[str, float]]) -> None:
         )
 
 
+def print_extra_table(extra_results: List[ExtraDistributionMetrics]) -> None:
+    headers = [
+        "cluster_size",
+        "uplink_rate_min_mbps",
+        "uplink_rate_p5_mbps",
+        "uplink_rate_median_mbps",
+        "uplink_delay_p95_ms",
+        "uplink_delay_max_ms",
+    ]
+    print("\nExtra Distribution Metrics")
+    print(" | ".join(headers))
+    print("-" * 120)
+    for row in extra_results:
+        print(
+            f"{row.cluster_size} | "
+            f"{row.uplink_rate_min_mbps:.3f} | "
+            f"{row.uplink_rate_p5_mbps:.3f} | "
+            f"{row.uplink_rate_median_mbps:.3f} | "
+            f"{row.uplink_delay_p95_ms:.3f} | "
+            f"{row.uplink_delay_max_ms:.3f}"
+        )
+
+
 def save_csv(results: List[Dict[str, float]], path: str) -> None:
     if not results:
         return
@@ -259,9 +330,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sweep cluster_size under fixed low-level actions and compare environment metrics."
     )
-    parser.add_argument("--cluster-sizes", type=str, default="1,3,5,7,10")
+    #parser.add_argument("--cluster-sizes", type=str, default="1,2,3,4,5")
+    parser.add_argument("--cluster-sizes", type=str, default="1,2,3,5,7,9")
     parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--episodes", type=int, default=1)
+    parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--action-idx", type=int, default=3, help="Fixed discrete action index in [0, 9].")
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--csv", type=str, default="")
@@ -272,18 +344,20 @@ def main() -> None:
 
     cluster_sizes = parse_cluster_sizes(args.cluster_sizes)
     results = []
+    extra_results = []
     for cs in cluster_sizes:
-        results.append(
-            run_one_cluster_size(
-                cluster_size=cs,
-                steps=args.steps,
-                episodes=args.episodes,
-                action_idx=args.action_idx,
-                seed=args.seed,
-            )
+        summary, extra = run_one_cluster_size(
+            cluster_size=cs,
+            steps=args.steps,
+            episodes=args.episodes,
+            action_idx=args.action_idx,
+            seed=args.seed,
         )
+        results.append(summary)
+        extra_results.append(extra)
 
     print_table(results)
+    print_extra_table(extra_results)
     if args.csv:
         save_csv(results, args.csv)
         print(f"\nSaved CSV: {args.csv}")
